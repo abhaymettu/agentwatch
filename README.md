@@ -1,5 +1,7 @@
 # agentwatch
 
+[![test](https://github.com/abhaymettu/agentwatch/actions/workflows/test.yml/badge.svg)](https://github.com/abhaymettu/agentwatch/actions/workflows/test.yml)
+
 A small supervisor for one long-running CLI agent process on one machine.
 
 It watches a PID and a log file. If the process is alive but the log file's
