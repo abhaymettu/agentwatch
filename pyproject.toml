@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agentwatch"
+version = "0.1.0"
+description = "Supervise one long-running CLI agent process: detect stalls by log mtime, warn, kill, or restart with backoff, log every event as JSONL."
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+test = ["pytest"]
+
+[project.scripts]
+agentwatch = "agentwatch:main"
+
+[tool.setuptools]
+py-modules = ["agentwatch"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
