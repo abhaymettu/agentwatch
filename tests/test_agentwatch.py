@@ -224,3 +224,23 @@ def test_tail_prints_summary(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "started" in out and "exited" in out
     assert out.strip().splitlines()[-1] == "started=1  exited=1"
+
+
+# -- regression: a PID we cannot signal must not be reported as gone ----------
+
+not_root = pytest.mark.skipif(os.geteuid() == 0, reason="root can signal PID 1")
+
+
+@not_root
+def test_kill_pid_raises_when_not_permitted():
+    # PID 1 exists but belongs to root. Before the fix this returned "already_gone",
+    # and the supervisor then wrote an "exited" event for a process still running.
+    with pytest.raises(PermissionError):
+        agentwatch.kill_pid(1, grace=0)
+
+
+@not_root
+def test_cli_rejects_unsignalable_pid_for_kill_and_restart(capsys):
+    assert agentwatch.main(["watch", "--pid", "1", "--log", "x", "--policy", "kill"]) == agentwatch.EXIT_USAGE
+    assert "cannot signal" in capsys.readouterr().err
+    assert agentwatch.main(["watch", "--pid", "1", "--log", "x", "--policy", "restart", "--cmd", "true"]) == agentwatch.EXIT_USAGE
