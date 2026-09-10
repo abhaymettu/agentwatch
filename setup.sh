@@ -9,5 +9,4 @@ python -c 'import sys; assert sys.version_info >= (3, 11), "agentwatch needs Pyt
 pip install -q -e '.[test]'
 python -m pytest -q
 echo
-echo 'usage: agentwatch watch --pid 1234 --log run.log --stall-after 300 --policy warn|kill|restart --cmd "..." --max-restarts 3 --events events.jsonl   |   agentwatch tail events.jsonl'
-echo '(activate with: . .venv/bin/activate)'
+echo 'installed. activate with: . .venv/bin/activate   then: agentwatch --help'

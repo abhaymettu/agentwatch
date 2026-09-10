@@ -10,12 +10,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import signal
 import subprocess
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 KINDS = ("started", "heartbeat", "stall_detected", "action_taken", "exited", "gave_up")
 
@@ -226,7 +227,7 @@ class Supervisor:
             OSError: the events file cannot be opened for append.
         """
         assert kind in KINDS, kind
-        rec = {"ts": datetime.now(timezone.utc).isoformat(timespec="seconds"), "kind": kind, "detail": detail}
+        rec = {"ts": datetime.now(UTC).isoformat(timespec="seconds"), "kind": kind, "detail": detail}
         with open(self.events, "a", encoding="utf-8") as f:
             f.write(json.dumps(rec, sort_keys=True) + "\n")
         print(f"agentwatch {kind} {json.dumps(detail, sort_keys=True)}", file=self.out, flush=True)
@@ -267,8 +268,9 @@ class Supervisor:
             PermissionError: the external PID cannot be signalled. ``main``
                 rejects such PIDs before ``run`` starts.
         """
-        how = kill_pid(self.pid, self.grace, alive=lambda _pid: self.is_alive(), sleep=self.sleep,
-                       group=self.child is not None)
+        how = kill_pid(
+            self.pid, self.grace, alive=lambda _pid: self.is_alive(), sleep=self.sleep, group=self.child is not None
+        )
         if self.child is not None:
             self.child.wait()  # reap; SIGKILL has been sent if SIGTERM did not work
         return how
@@ -346,8 +348,14 @@ class Supervisor:
             return False
         delay = backoff(self.restarts, self.backoff_base, self.backoff_cap)
         self.restarts += 1
-        self.emit("action_taken", action="restart", attempt=self.restarts, max_restarts=self.max_restarts,
-                  backoff_seconds=delay, reason=reason)
+        self.emit(
+            "action_taken",
+            action="restart",
+            attempt=self.restarts,
+            max_restarts=self.max_restarts,
+            backoff_seconds=delay,
+            reason=reason,
+        )
         self.sleep(delay)
         self.spawn()
         self.emit("started", pid=self.pid, cmd=self.cmd, restart=self.restarts)
@@ -362,13 +370,22 @@ class Supervisor:
             ``EXIT_OK``, ``EXIT_KILLED`` or ``EXIT_GAVE_UP`` as set by ``step``,
             or 130 on KeyboardInterrupt. On interrupt a spawned child is left
             running; only an ``exited`` event with reason
-            ``agentwatch_interrupted`` is written.
+            ``agentwatch_interrupted`` is written (``pid`` is null if the
+            interrupt landed before the child was spawned).
         """
-        if self.pid is None:
-            self.spawn()
-        self.emit("started", pid=self.pid, log=self.log, stall_after=self.stall_after, policy=self.policy,
-                  cmd=self.cmd, max_restarts=self.max_restarts, restart=0)
         try:
+            if self.pid is None:
+                self.spawn()
+            self.emit(
+                "started",
+                pid=self.pid,
+                log=self.log,
+                stall_after=self.stall_after,
+                policy=self.policy,
+                cmd=self.cmd,
+                max_restarts=self.max_restarts,
+                restart=0,
+            )
             while self.step():
                 self.sleep(self.interval)
         except KeyboardInterrupt:
@@ -391,20 +408,24 @@ def tail(path: str, out=None) -> int:
         0.
 
     Raises:
-        FileNotFoundError: ``path`` does not exist.
-        json.JSONDecodeError: a non-blank line is not valid JSON, for example
-            a line agentwatch is still writing.
-        KeyError: a record has no ``kind``.
+        OSError: ``path`` cannot be read.
+        ValueError: a non-blank line is not a valid event, for example a line
+            agentwatch is still writing. The message names the line number.
     """
     out = out or sys.stdout
     counts: dict[str, int] = {}
     with open(path, encoding="utf-8") as f:
-        for line in f:
+        for n, line in enumerate(f, 1):
             line = line.strip()
             if not line:
                 continue
-            rec = json.loads(line)
-            kind = rec["kind"]
+            try:
+                rec = json.loads(line)
+                kind = rec["kind"]
+            except (ValueError, KeyError, TypeError):
+                raise ValueError(
+                    f"{path} line {n} is not a complete event; rerun if agentwatch is still writing"
+                ) from None
             counts[kind] = counts.get(kind, 0) + 1
             d = rec.get("detail", {})
             summary = " ".join(f"{k}={v}" for k, v in sorted(d.items()) if v is not None)
@@ -416,8 +437,21 @@ def tail(path: str, out=None) -> int:
 
 # -- cli --------------------------------------------------------------------
 
-USAGE = ('agentwatch watch --pid 1234 --log run.log --stall-after 300 '
-         '--policy warn|kill|restart [--cmd "..."] [--max-restarts 3] [--events events.jsonl]')
+
+def positive(s: str) -> float:
+    """argparse type: a finite float greater than zero (rejects nan and inf)."""
+    v = float(s)
+    if not (math.isfinite(v) and v > 0):
+        raise argparse.ArgumentTypeError("must be a finite number greater than 0")
+    return v
+
+
+def nonnegative_int(s: str) -> int:
+    """argparse type: an int of zero or more."""
+    v = int(s)
+    if v < 0:
+        raise argparse.ArgumentTypeError("must be 0 or more")
+    return v
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -428,19 +462,23 @@ def build_parser() -> argparse.ArgumentParser:
     w = sub.add_parser("watch", help="supervise a process")
     w.add_argument("--pid", type=int, help="PID to watch; omit to spawn --cmd yourself")
     w.add_argument("--log", help="output log file whose mtime shows progress")
-    w.add_argument("--stall-after", type=float, default=300, help="seconds without log change before a stall (default 300)")
-    w.add_argument("--policy", choices=["warn", "kill", "restart"], default="warn")
+    w.add_argument(
+        "--stall-after", type=positive, default=300, help="seconds without log change before a stall (default 300)"
+    )
+    w.add_argument(
+        "--policy", choices=["warn", "kill", "restart"], default="warn", help="what to do on a stall (default warn)"
+    )
     w.add_argument("--cmd", help="shell command to (re)start; required for --policy restart")
-    w.add_argument("--max-restarts", type=int, default=3)
+    w.add_argument("--max-restarts", type=nonnegative_int, default=3, help="restarts before giving up (default 3)")
     w.add_argument("--events", default="events.jsonl", help="JSONL event log path (default events.jsonl)")
-    w.add_argument("--interval", type=float, default=1.0, help="seconds between checks (default 1)")
-    w.add_argument("--heartbeat", type=float, default=60.0, help="seconds between heartbeat events (default 60)")
-    w.add_argument("--backoff-base", type=float, default=1.0, help="first restart delay in seconds (default 1)")
-    w.add_argument("--backoff-cap", type=float, default=60.0, help="max restart delay in seconds (default 60)")
-    w.add_argument("--grace", type=float, default=5.0, help="seconds between SIGTERM and SIGKILL (default 5)")
+    w.add_argument("--interval", type=positive, default=1.0, help="seconds between checks (default 1)")
+    w.add_argument("--heartbeat", type=positive, default=60.0, help="seconds between heartbeat events (default 60)")
+    w.add_argument("--backoff-base", type=positive, default=1.0, help="first restart delay in seconds (default 1)")
+    w.add_argument("--backoff-cap", type=positive, default=60.0, help="max restart delay in seconds (default 60)")
+    w.add_argument("--grace", type=positive, default=5.0, help="seconds between SIGTERM and SIGKILL (default 5)")
 
     t = sub.add_parser("tail", help="print a human summary of an events file")
-    t.add_argument("events")
+    t.add_argument("events", help="JSONL file written by agentwatch watch")
     return p
 
 
@@ -452,37 +490,50 @@ def main(argv: list[str] | None = None) -> int:
 
     Returns:
         Process exit code: ``tail`` returns 0; ``watch`` returns what
-        ``Supervisor.run`` returns, or ``EXIT_USAGE`` for bad arguments, a
-        PID that is not running, or a PID that ``kill`` or ``restart`` could
-        not signal.
+        ``Supervisor.run`` returns. Either returns ``EXIT_USAGE`` after one
+        line on stderr for bad arguments, a PID that is not running or that
+        ``kill`` or ``restart`` could not signal, an events file that cannot
+        be read or written, or a log path that cannot be checked. If the
+        events file or log stops being usable mid-run, the error line also
+        names the PID that is now running unsupervised.
 
     Raises:
-        SystemExit: argparse rejected the arguments.
+        SystemExit: argparse rejected the arguments (exit code 2).
     """
     args = build_parser().parse_args(argv)
-    if args.command == "tail":
-        return tail(args.events)
+    sup = None
     try:
+        if args.command == "tail":
+            return tail(args.events)
         sup = Supervisor(
-            pid=args.pid, log=args.log, stall_after=args.stall_after, policy=args.policy, cmd=args.cmd,
-            max_restarts=args.max_restarts, events=args.events, interval=args.interval, heartbeat=args.heartbeat,
-            backoff_base=args.backoff_base, backoff_cap=args.backoff_cap, grace=args.grace,
+            pid=args.pid,
+            log=args.log,
+            stall_after=args.stall_after,
+            policy=args.policy,
+            cmd=args.cmd,
+            max_restarts=args.max_restarts,
+            events=args.events,
+            interval=args.interval,
+            heartbeat=args.heartbeat,
+            backoff_base=args.backoff_base,
+            backoff_cap=args.backoff_cap,
+            grace=args.grace,
         )
-    except ValueError as e:
-        print(f"agentwatch: {e}\nusage: {USAGE}", file=sys.stderr)
+        if args.pid is not None:
+            try:
+                os.kill(args.pid, 0)
+            except ProcessLookupError:
+                raise ValueError(f"pid {args.pid} is not running") from None
+            except PermissionError:
+                if args.policy != "warn":
+                    raise ValueError(f"pid {args.pid} is running but you cannot signal it; use --policy warn") from None
+        return sup.run()
+    except (OSError, ValueError) as e:
+        still = (
+            f"; pid {sup.pid} is still running unsupervised" if sup and sup.pid is not None and sup.is_alive() else ""
+        )
+        print(f"agentwatch: {e}{still}", file=sys.stderr)
         return EXIT_USAGE
-    if args.pid is not None:
-        try:
-            os.kill(args.pid, 0)
-        except ProcessLookupError:
-            print(f"agentwatch: pid {args.pid} is not running", file=sys.stderr)
-            return EXIT_USAGE
-        except PermissionError:
-            if args.policy != "warn":
-                print(f"agentwatch: pid {args.pid} is running but you cannot signal it; use --policy warn",
-                      file=sys.stderr)
-                return EXIT_USAGE
-    return sup.run()
 
 
 if __name__ == "__main__":

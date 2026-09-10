@@ -47,14 +47,20 @@ Python 3.11 or newer. No dependencies outside the standard library. pytest is
 only used for the tests.
 
 ```
-git clone <this repo> agentwatch
+pip install git+https://github.com/abhaymettu/agentwatch
+```
+
+Or, to work on it:
+
+```
+git clone https://github.com/abhaymettu/agentwatch
 cd agentwatch
 ./setup.sh
 . .venv/bin/activate
 ```
 
-`setup.sh` creates `.venv`, installs the package in editable mode, runs the
-tests, and prints the usage line. Running it again is safe.
+`setup.sh` creates `.venv`, installs the package in editable mode, and runs
+the tests. Running it again is safe.
 
 ## Usage
 
@@ -145,21 +151,11 @@ $ agentwatch tail restart.jsonl | tail -2
 started=3  stall_detected=3  action_taken=5  gave_up=1
 ```
 
-The same run's `restart.jsonl`, which is what `tail` read:
+The first two lines of the same run's `restart.jsonl`, which is what `tail` read:
 
 ```
 {"detail": {"cmd": "echo tick >> restart.log; sleep 30", "log": "restart.log", "max_restarts": 2, "pid": 57873, "policy": "restart", "restart": 0, "stall_after": 1.0}, "kind": "started", "ts": "2026-09-10T16:08:07+00:00"}
 {"detail": {"idle_seconds": 1.1, "pid": 57873, "policy": "restart"}, "kind": "stall_detected", "ts": "2026-09-10T16:08:08+00:00"}
-{"detail": {"action": "kill", "pid": 57873, "signal": "SIGTERM"}, "kind": "action_taken", "ts": "2026-09-10T16:08:09+00:00"}
-{"detail": {"action": "restart", "attempt": 1, "backoff_seconds": 1.0, "max_restarts": 2, "reason": "stall"}, "kind": "action_taken", "ts": "2026-09-10T16:08:09+00:00"}
-{"detail": {"cmd": "echo tick >> restart.log; sleep 30", "pid": 57945, "restart": 1}, "kind": "started", "ts": "2026-09-10T16:08:10+00:00"}
-{"detail": {"idle_seconds": 1.1, "pid": 57945, "policy": "restart"}, "kind": "stall_detected", "ts": "2026-09-10T16:08:11+00:00"}
-{"detail": {"action": "kill", "pid": 57945, "signal": "SIGTERM"}, "kind": "action_taken", "ts": "2026-09-10T16:08:11+00:00"}
-{"detail": {"action": "restart", "attempt": 2, "backoff_seconds": 2.0, "max_restarts": 2, "reason": "stall"}, "kind": "action_taken", "ts": "2026-09-10T16:08:11+00:00"}
-{"detail": {"cmd": "echo tick >> restart.log; sleep 30", "pid": 57994, "restart": 2}, "kind": "started", "ts": "2026-09-10T16:08:14+00:00"}
-{"detail": {"idle_seconds": 1.1, "pid": 57994, "policy": "restart"}, "kind": "stall_detected", "ts": "2026-09-10T16:08:15+00:00"}
-{"detail": {"action": "kill", "pid": 57994, "signal": "SIGTERM"}, "kind": "action_taken", "ts": "2026-09-10T16:08:15+00:00"}
-{"detail": {"max_restarts": 2, "pid": 57994, "reason": "stall", "restarts": 2}, "kind": "gave_up", "ts": "2026-09-10T16:08:15+00:00"}
 ```
 
 ### Options for `watch`
@@ -171,7 +167,7 @@ The same run's `restart.jsonl`, which is what `tail` read:
 | `--stall-after` | 300 | Seconds of unchanged mtime before a stall |
 | `--policy` | warn | `warn`, `kill`, or `restart` |
 | `--cmd` | none | Shell command to run. Required for `restart` |
-| `--max-restarts` | 3 | Restarts before giving up |
+| `--max-restarts` | 3 | Restarts before giving up. 0 or more |
 | `--events` | events.jsonl | Where events are appended |
 | `--interval` | 1 | Seconds between checks |
 | `--heartbeat` | 60 | Seconds between heartbeat events |
@@ -179,14 +175,17 @@ The same run's `restart.jsonl`, which is what `tail` read:
 | `--backoff-cap` | 60 | Longest restart delay in seconds |
 | `--grace` | 5 | Seconds between SIGTERM and SIGKILL |
 
+Every number must be finite and greater than 0 (`--max-restarts` may be 0).
+argparse rejects anything else, including `nan` and `inf`, with exit code 2.
+
 ### Exit codes
 
 | Code | Meaning |
 | --- | --- |
 | 0 | The process ended on its own with status 0, or an external PID went away |
 | 1 | agentwatch killed it, or a spawned child exited nonzero under `warn` or `kill` |
-| 2 | Gave up after `--max-restarts` |
-| 3 | Bad arguments, a PID that is not running, or a PID that `kill` or `restart` cannot signal |
+| 2 | Gave up after `--max-restarts`. Also argparse's code for an unknown flag or a bad number |
+| 3 | A PID that is not running or that `kill` or `restart` cannot signal, `restart` without `--cmd`, or an events or log path that cannot be used. One line on stderr, no traceback |
 | 130 | Ctrl-C |
 
 ## Event log
@@ -241,19 +240,9 @@ state on disk other than the events file.
    writes `gave_up` and stops.
 4. If `--heartbeat` seconds have passed since the last heartbeat, write one.
 
-**Where state lives.** All on the `Supervisor` instance:
-
-| Field | Meaning |
-| --- | --- |
-| `pid`, `child` | What is being watched. `child` is the `Popen` if agentwatch spawned it, else None |
-| `last_mtime`, `last_change` | Last mtime seen and the supervisor's clock reading when it last differed |
-| `stalled` | True once the current stall has been reported; cleared on the next mtime change or spawn |
-| `restarts` | Restarts used so far. Never reset |
-| `last_heartbeat` | Clock reading of the last heartbeat |
-| `exit_code` | Set by `step` or `restart` when the loop should stop |
-
-`clock`, `sleep`, `alive`, and `out` are constructor arguments so the tests
-can drive `step` with a fake clock and no waiting.
+**Where state lives.** All on the `Supervisor` instance; the class docstring
+lists each field. `clock`, `sleep`, `alive`, and `out` are constructor
+arguments so the tests can drive `step` with a fake clock and no waiting.
 
 ## Design decisions
 
@@ -322,7 +311,8 @@ agentwatch cannot read the status of a process it did not spawn.
 `sort_keys=True` on its own line and the file is opened for append every
 time. Why: `tail`, `grep`, and `jq` all work on it, a crash loses at most the
 line being written, and rerunning appends to the same history. Cost: no
-rotation, and `agentwatch tail` fails on a line that is still being written.
+rotation, and `agentwatch tail` stops with the line number when it meets a
+line that is still being written.
 
 **A PID that cannot be signalled is refused up front.** `main` sends signal 0
 to `--pid` before starting. A process that exists but returns EPERM is
@@ -352,4 +342,7 @@ pytest
 Covers backoff math, stall detection and re-arming with a fake clock and a
 fake log, heartbeat timing, kill of a real child, restart give-up with real
 child processes, restart on nonzero exit, no restart on clean exit, CLI
-argument errors, refusal of a PID that cannot be signalled, and `tail` output.
+argument errors, refusal of a PID that cannot be signalled, Ctrl-C exiting
+130 with the child left running, one-line errors for unusable paths and
+half-written events files, and `tail` output. CI runs the same suite plus
+`ruff check` and `ruff format --check` on Linux and macOS.

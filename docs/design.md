@@ -130,5 +130,6 @@ alone as well.
 ### Half-written events
 
 `emit` opens the file for append and writes one line per event. `agentwatch
-tail` reads the whole file and fails on a line that is not yet complete
-JSON. Rerun it; the line will be complete once the write returns.
+tail` reads the whole file and, on a line that is not yet complete JSON,
+prints one line naming the line number and exits 3. Rerun it; the line will
+be complete once the write returns.

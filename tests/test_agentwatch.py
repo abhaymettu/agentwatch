@@ -1,6 +1,7 @@
 import io
 import json
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -8,8 +9,8 @@ import time
 import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-import agentwatch  # noqa: E402
-from agentwatch import EXIT_GAVE_UP, EXIT_KILLED, EXIT_OK, Supervisor, backoff  # noqa: E402
+import agentwatch
+from agentwatch import EXIT_GAVE_UP, EXIT_KILLED, EXIT_OK, EXIT_USAGE, Supervisor, backoff
 
 
 def read_events(path):
@@ -55,16 +56,26 @@ def make_sup(tmp_path, clock, policy="warn", **kw):
     os.utime(log, (clock.t, clock.t))
     events = tmp_path / "events.jsonl"
     sup = Supervisor(
-        pid=424242, log=str(log), stall_after=10, policy=policy, cmd=kw.pop("cmd", None),
-        max_restarts=kw.pop("max_restarts", 3), events=str(events), heartbeat=5,
-        clock=clock, sleep=lambda s: None, alive=kw.pop("alive", lambda pid: True), out=io.StringIO(), **kw,
+        pid=424242,
+        log=str(log),
+        stall_after=10,
+        policy=policy,
+        cmd=kw.pop("cmd", None),
+        max_restarts=kw.pop("max_restarts", 3),
+        events=str(events),
+        heartbeat=5,
+        clock=clock,
+        sleep=lambda s: None,
+        alive=kw.pop("alive", lambda pid: True),
+        out=io.StringIO(),
+        **kw,
     )
     return sup, log, events
 
 
 def test_stall_detected_when_log_mtime_frozen(tmp_path):
     clock = FakeClock()
-    sup, log, events = make_sup(tmp_path, clock)
+    sup, _, events = make_sup(tmp_path, clock)
     assert sup.step() is True
     clock.advance(9)
     assert sup.step() is True
@@ -106,7 +117,7 @@ def test_log_write_resets_stall_timer_and_rearms(tmp_path):
 
 def test_heartbeat_emitted_on_interval(tmp_path):
     clock = FakeClock()
-    sup, log, events = make_sup(tmp_path, clock)
+    sup, _, events = make_sup(tmp_path, clock)
     sup.step()
     clock.advance(5)
     sup.step()
@@ -117,7 +128,7 @@ def test_heartbeat_emitted_on_interval(tmp_path):
 
 def test_process_exit_ends_watch(tmp_path):
     clock = FakeClock()
-    sup, log, events = make_sup(tmp_path, clock, alive=lambda pid: False)
+    sup, _, events = make_sup(tmp_path, clock, alive=lambda pid: False)
     assert sup.step() is False
     assert kinds(events) == ["exited"]
     assert sup.exit_code == EXIT_OK
@@ -125,7 +136,7 @@ def test_process_exit_ends_watch(tmp_path):
 
 def test_event_lines_have_ts_kind_detail(tmp_path):
     clock = FakeClock()
-    sup, log, events = make_sup(tmp_path, clock)
+    sup, _, events = make_sup(tmp_path, clock)
     clock.advance(11)
     sup.step()
     for e in read_events(events):
@@ -142,8 +153,19 @@ def test_kill_policy_kills_real_process(tmp_path):
     log.write_text("x")
     events = tmp_path / "events.jsonl"
     clock = FakeClock(time.time())
-    sup = Supervisor(pid=proc.pid, log=str(log), stall_after=1, policy="kill", cmd=None, max_restarts=0,
-                     events=str(events), clock=clock, sleep=lambda s: None, grace=2, out=io.StringIO())
+    sup = Supervisor(
+        pid=proc.pid,
+        log=str(log),
+        stall_after=1,
+        policy="kill",
+        cmd=None,
+        max_restarts=0,
+        events=str(events),
+        clock=clock,
+        sleep=lambda s: None,
+        grace=2,
+        out=io.StringIO(),
+    )
     clock.advance(2)
     assert sup.step() is False
     proc.wait(timeout=5)
@@ -158,9 +180,19 @@ def test_restart_gives_up_after_max_restarts(tmp_path):
     events = tmp_path / "events.jsonl"
     slept = []
     sup = Supervisor(
-        pid=None, log=str(log), stall_after=0.05, policy="restart", cmd="sleep 60", max_restarts=2,
-        events=str(events), interval=0.02, backoff_base=0.01, backoff_cap=0.02, grace=1,
-        sleep=lambda s: slept.append(s) or time.sleep(min(s, 0.05)), out=io.StringIO(),
+        pid=None,
+        log=str(log),
+        stall_after=0.05,
+        policy="restart",
+        cmd="sleep 60",
+        max_restarts=2,
+        events=str(events),
+        interval=0.02,
+        backoff_base=0.01,
+        backoff_cap=0.02,
+        grace=1,
+        sleep=lambda s: slept.append(s) or time.sleep(min(s, 0.05)),
+        out=io.StringIO(),
     )
     rc = sup.run()
     assert rc == EXIT_GAVE_UP
@@ -182,8 +214,17 @@ def test_restart_on_nonzero_child_exit(tmp_path):
     log.write_text("x")
     events = tmp_path / "events.jsonl"
     sup = Supervisor(
-        pid=None, log=str(log), stall_after=100, policy="restart", cmd="exit 7", max_restarts=1,
-        events=str(events), interval=0.02, backoff_base=0.01, backoff_cap=0.01, sleep=time.sleep,
+        pid=None,
+        log=str(log),
+        stall_after=100,
+        policy="restart",
+        cmd="exit 7",
+        max_restarts=1,
+        events=str(events),
+        interval=0.02,
+        backoff_base=0.01,
+        backoff_cap=0.01,
+        sleep=time.sleep,
         out=io.StringIO(),
     )
     rc = sup.run()
@@ -195,8 +236,17 @@ def test_restart_on_nonzero_child_exit(tmp_path):
 
 def test_clean_child_exit_is_not_restarted(tmp_path):
     events = tmp_path / "events.jsonl"
-    sup = Supervisor(pid=None, log=None, stall_after=100, policy="restart", cmd="true", max_restarts=3,
-                     events=str(events), interval=0.02, out=io.StringIO())
+    sup = Supervisor(
+        pid=None,
+        log=None,
+        stall_after=100,
+        policy="restart",
+        cmd="true",
+        max_restarts=3,
+        events=str(events),
+        interval=0.02,
+        out=io.StringIO(),
+    )
     assert sup.run() == EXIT_OK
     assert kinds(events) == ["started", "exited"]
 
@@ -217,13 +267,99 @@ def test_cli_rejects_dead_pid(capsys):
 
 def test_tail_prints_summary(tmp_path, capsys):
     events = tmp_path / "events.jsonl"
-    sup = Supervisor(pid=None, log=None, stall_after=100, policy="warn", cmd="true", max_restarts=0,
-                     events=str(events), interval=0.02, out=io.StringIO())
+    sup = Supervisor(
+        pid=None,
+        log=None,
+        stall_after=100,
+        policy="warn",
+        cmd="true",
+        max_restarts=0,
+        events=str(events),
+        interval=0.02,
+        out=io.StringIO(),
+    )
     sup.run()
     assert agentwatch.main(["tail", str(events)]) == 0
     out = capsys.readouterr().out
     assert "started" in out and "exited" in out
     assert out.strip().splitlines()[-1] == "started=1  exited=1"
+
+
+def test_cli_rejects_nonpositive_numbers():
+    cases = [("--interval", "-1"), ("--stall-after", "0"), ("--grace", "0"), ("--max-restarts", "-1")]
+    cases += [("--interval", "nan"), ("--heartbeat", "inf"), ("--backoff-cap", "-inf")]
+    for flag, value in cases:
+        with pytest.raises(SystemExit) as e:
+            agentwatch.main(["watch", "--cmd", "true", flag, value])
+        assert e.value.code == 2
+
+
+def test_cli_reports_unwritable_events_path_on_one_line(tmp_path, capsys):
+    missing = tmp_path / "nodir" / "events.jsonl"
+    assert agentwatch.main(["watch", "--cmd", "true", "--events", str(missing)]) == EXIT_USAGE
+    err = capsys.readouterr().err
+    assert "Traceback" not in err and "nodir" in err
+
+
+def test_midrun_events_failure_names_the_running_pid(tmp_path, capsys, monkeypatch):
+    events = tmp_path / "events.jsonl"
+
+    def boom(self):
+        raise PermissionError(f"{events}: read-only file system")
+
+    monkeypatch.setattr(agentwatch.Supervisor, "step", boom)
+    rc = agentwatch.main(["watch", "--cmd", "sleep 30", "--events", str(events)])
+    child = read_events(events)[0]["detail"]["pid"]
+    try:
+        assert rc == EXIT_USAGE
+        err = capsys.readouterr().err
+        assert "Traceback" not in err and f"pid {child} is still running unsupervised" in err
+    finally:
+        os.killpg(child, signal.SIGKILL)
+
+
+def test_tail_missing_file_is_one_line_error(tmp_path, capsys):
+    assert agentwatch.main(["tail", str(tmp_path / "nope.jsonl")]) == EXIT_USAGE
+    err = capsys.readouterr().err
+    assert err.startswith("agentwatch: ") and "Traceback" not in err
+
+
+def test_tail_names_the_half_written_line(tmp_path, capsys):
+    events = tmp_path / "events.jsonl"
+    events.write_text('{"ts": "t", "kind": "started", "detail": {}}\n{"ts": "t", "kind": "heartb')
+    assert agentwatch.main(["tail", str(events)]) == EXIT_USAGE
+    assert "line 2" in capsys.readouterr().err
+
+
+def test_ctrl_c_exits_130_and_leaves_child_running(tmp_path):
+    events = tmp_path / "events.jsonl"
+    proc = subprocess.Popen(
+        [
+            sys.executable,
+            agentwatch.__file__,
+            "watch",
+            "--cmd",
+            "sleep 30",
+            "--events",
+            str(events),
+            "--interval",
+            "0.05",
+        ],
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    for _ in range(100):  # wait for the started event
+        if events.exists() and read_events(events):
+            break
+        time.sleep(0.05)
+    proc.send_signal(signal.SIGINT)
+    proc.wait(timeout=5)
+    assert proc.returncode == 130
+    ev = read_events(events)
+    assert ev[-1]["kind"] == "exited" and ev[-1]["detail"]["reason"] == "agentwatch_interrupted"
+    child = ev[0]["detail"]["pid"]
+    assert agentwatch.pid_alive(child)  # documented: Ctrl-C does not reach the child
+    os.killpg(child, signal.SIGKILL)
 
 
 # -- regression: a PID we cannot signal must not be reported as gone ----------
@@ -243,4 +379,7 @@ def test_kill_pid_raises_when_not_permitted():
 def test_cli_rejects_unsignalable_pid_for_kill_and_restart(capsys):
     assert agentwatch.main(["watch", "--pid", "1", "--log", "x", "--policy", "kill"]) == agentwatch.EXIT_USAGE
     assert "cannot signal" in capsys.readouterr().err
-    assert agentwatch.main(["watch", "--pid", "1", "--log", "x", "--policy", "restart", "--cmd", "true"]) == agentwatch.EXIT_USAGE
+    assert (
+        agentwatch.main(["watch", "--pid", "1", "--log", "x", "--policy", "restart", "--cmd", "true"])
+        == agentwatch.EXIT_USAGE
+    )
