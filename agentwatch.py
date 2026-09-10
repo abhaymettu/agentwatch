@@ -501,7 +501,7 @@ def main(argv: list[str] | None = None) -> int:
         SystemExit: argparse rejected the arguments (exit code 2).
     """
     args = build_parser().parse_args(argv)
-    sup = None
+    running = False
     try:
         if args.command == "tail":
             return tail(args.events)
@@ -527,10 +527,13 @@ def main(argv: list[str] | None = None) -> int:
             except PermissionError:
                 if args.policy != "warn":
                     raise ValueError(f"pid {args.pid} is running but you cannot signal it; use --policy warn") from None
+        running = True
         return sup.run()
     except (OSError, ValueError) as e:
         still = (
-            f"; pid {sup.pid} is still running unsupervised" if sup and sup.pid is not None and sup.is_alive() else ""
+            f"; pid {sup.pid} is still running unsupervised"
+            if running and sup.pid is not None and sup.is_alive()
+            else ""
         )
         print(f"agentwatch: {e}{still}", file=sys.stderr)
         return EXIT_USAGE

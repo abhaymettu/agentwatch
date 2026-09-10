@@ -378,7 +378,8 @@ def test_kill_pid_raises_when_not_permitted():
 @not_root
 def test_cli_rejects_unsignalable_pid_for_kill_and_restart(capsys):
     assert agentwatch.main(["watch", "--pid", "1", "--log", "x", "--policy", "kill"]) == agentwatch.EXIT_USAGE
-    assert "cannot signal" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "cannot signal" in err and "unsupervised" not in err  # refused before supervision started
     assert (
         agentwatch.main(["watch", "--pid", "1", "--log", "x", "--policy", "restart", "--cmd", "true"])
         == agentwatch.EXIT_USAGE
