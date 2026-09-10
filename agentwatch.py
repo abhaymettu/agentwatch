@@ -454,13 +454,21 @@ def nonnegative_int(s: str) -> int:
     return v
 
 
+def pid_arg(s: str) -> int:
+    """argparse type: a process ID, 1 or more and within the kernel's pid_t range."""
+    v = int(s)
+    if not 1 <= v < 2**31:
+        raise argparse.ArgumentTypeError("must be a process ID (1 or more)")
+    return v
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the ``agentwatch`` argument parser with the ``watch`` and ``tail`` subcommands."""
     p = argparse.ArgumentParser(prog="agentwatch", description=__doc__.strip().splitlines()[0])
     sub = p.add_subparsers(dest="command", required=True)
 
     w = sub.add_parser("watch", help="supervise a process")
-    w.add_argument("--pid", type=int, help="PID to watch; omit to spawn --cmd yourself")
+    w.add_argument("--pid", type=pid_arg, help="PID to watch; omit to spawn --cmd yourself")
     w.add_argument("--log", help="output log file whose mtime shows progress")
     w.add_argument(
         "--stall-after", type=positive, default=300, help="seconds without log change before a stall (default 300)"

@@ -332,12 +332,17 @@ rather than lying.
 - With the default 1 s interval, a stall is reported between `--stall-after`
   and `--stall-after` plus one interval after the last write.
 
-## Tests
+## Tests and contributing
 
 ```
 . .venv/bin/activate
 pytest
+ruff check . && ruff format --check .
 ```
+
+Pull requests are welcome. Keep it one file and standard library only; add a
+test for any behaviour change and update the tables above if a flag or exit
+code moves.
 
 Covers backoff math, stall detection and re-arming with a fake clock and a
 fake log, heartbeat timing, kill of a real child, restart give-up with real

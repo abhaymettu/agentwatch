@@ -288,6 +288,7 @@ def test_tail_prints_summary(tmp_path, capsys):
 def test_cli_rejects_nonpositive_numbers():
     cases = [("--interval", "-1"), ("--stall-after", "0"), ("--grace", "0"), ("--max-restarts", "-1")]
     cases += [("--interval", "nan"), ("--heartbeat", "inf"), ("--backoff-cap", "-inf")]
+    cases += [("--pid", "0"), ("--pid", "-5"), ("--pid", "999999999999999999999")]
     for flag, value in cases:
         with pytest.raises(SystemExit) as e:
             agentwatch.main(["watch", "--cmd", "true", flag, value])
